@@ -38,10 +38,6 @@ fn initialize_xip_ram() {
 
 static mut BOOT2_COPYOUT: [u32; 64] = [0; 64];
 
-#[link_section = ".xiptext"]
-// safety: must only be called while XIP RAM is initialized with
-// the RAM functions
-#[inline(never)]
 unsafe fn boot_2_copyout() {
     let xip_base = 0x10000000 as *const u32;
     let copyout = BOOT2_COPYOUT.as_mut_ptr();
@@ -80,17 +76,12 @@ unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
     let flash_flush_cache: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"FC".clone());
     let flash_enter_cmd_xip: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"CX".clone());
 
-    boot_2_copyout();
-
-    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-    let enable_xip = flash_enable_xip_via_boot2();
-    info!("enable_xip = {:x}", enable_xip as *const u8 as u32);
 
     //connect_internal_flash();
     flash_exit_xip();
 
-    set_cs(false);
     /*
+    set_cs(false);
 
          let ssi = &*pac::XIP_SSI::ptr();
 
@@ -126,11 +117,19 @@ unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
          }
 
 
-        flash_flush_cache();
     */
-    //set_cs(true);
+        set_cs(true);
+    (&*pac::IO_QSPI::ptr())
+        .gpio_qspiss
+        .gpio_ctrl
+        .modify(|_, w| {
+                w.outover().normal()
+        });
+    //flash_flush_cache();
+    // re-enable XIP, but without caching, so XIP RAM stays available
     flash_enter_cmd_xip();
     //enable_xip();
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }
 
 // some non-pub stuff copied from HAL
@@ -168,12 +167,11 @@ fn rom_table_lookup<T>(table: *const u16, tag: RomFnTableCode) -> T {
     }
 }
 
-#[link_section = ".xiptext"]
-// safety: must only be called while XIP RAM is initialized with
-// the RAM functions
 #[inline(never)]
-unsafe fn flash_enable_xip_via_boot2() -> extern "C" fn() {
-    core::mem::transmute((BOOT2_COPYOUT.as_mut_ptr() as *const u8).add(1))
+unsafe fn flash_enable_xip_via_boot2() {
+    let start: extern "C" fn() =
+        core::mem::transmute((BOOT2_COPYOUT.as_mut_ptr() as *const u8).add(1));
+    start();
 }
 
 const FLASH_RUID_CMD: u8 = 0x4b;
@@ -188,8 +186,14 @@ fn read_uid() -> u64 {
     txbuf[0] = FLASH_RUID_CMD;
 
     unsafe {
+        boot_2_copyout();
+        info!("copyout done");
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         initialize_xip_ram();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         do_flash_cmd(txbuf.as_ptr(), rxbuf.as_mut_ptr(), FLASH_RUID_TOTAL_BYTES);
+        //info!("call boot2");
+        flash_enable_xip_via_boot2();
     }
 
     info!("done");
