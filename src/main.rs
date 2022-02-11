@@ -1,17 +1,13 @@
-//! Blinks the LED on a Pico board
-//!
-//! This will blink an LED attached to GP25, which is the pin the Pico uses for the on-board LED.
 #![no_std]
 #![no_main]
 
-use cortex_m_rt::{entry, exception, ExceptionFrame};
+use cortex_m_rt::entry;
 use defmt::info;
 use defmt_rtt as _;
 use panic_probe as _;
 use rp_pico as bsp;
 
 use bsp::hal::pac;
-use bsp::hal::rom_data;
 use core::convert::TryInto;
 
 extern "C" {
@@ -20,6 +16,8 @@ extern "C" {
     static mut __exiptext: u8;
 }
 
+/// Disable XIP caching, and initialize
+/// memory region XIP_RAM with contents from flash
 fn initialize_xip_ram() {
     // disable XIP caching
     unsafe {
@@ -37,6 +35,8 @@ fn initialize_xip_ram() {
     }
 }
 
+// This can't be in XIP_RAM, as calling it will enable
+// XIP caching and therefore overwrites XIP_RAM.
 static mut BOOT2_COPYOUT: [u32; 64] = [0; 64];
 
 unsafe fn boot_2_copyout() {
@@ -55,7 +55,7 @@ unsafe fn boot_2_copyout() {
 // the RAM functions
 #[inline(never)]
 unsafe fn set_cs(level: bool) {
-    (&*pac::IO_QSPI::ptr())
+    (*pac::IO_QSPI::ptr())
         .gpio_qspiss
         .gpio_ctrl
         .modify(|_, w| {
@@ -72,10 +72,10 @@ unsafe fn set_cs(level: bool) {
 // the RAM functions
 #[inline(never)]
 unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
-    let connect_internal_flash: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"IF".clone());
-    let flash_exit_xip: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"EX".clone());
-    let flash_flush_cache: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"FC".clone());
-    let flash_enter_cmd_xip: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"CX".clone());
+    let connect_internal_flash: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, *b"IF");
+    let flash_exit_xip: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, *b"EX");
+    //let flash_flush_cache: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, *b"FC");
+    let flash_enter_cmd_xip: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, *b"CX");
 
     info!("txbuf: {:x}", txbuf);
     info!("rxbuf: {:x}", rxbuf);
@@ -124,16 +124,16 @@ unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
 
 
         set_cs(true);
-    (&*pac::IO_QSPI::ptr())
+    (*pac::IO_QSPI::ptr())
         .gpio_qspiss
         .gpio_ctrl
         .modify(|_, w| {
                 w.outover().normal()
         });
-    //flash_flush_cache();
-    // re-enable XIP, but without caching, so XIP RAM stays available
+    // Can't use this, as enabling the cache would overwrite the currently running method
+    // flash_flush_cache();
+    // Instead, re-enable XIP, but without caching, so XIP RAM stays available
     flash_enter_cmd_xip();
-    //enable_xip();
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }
 
@@ -156,9 +156,6 @@ const ROM_TABLE_LOOKUP_PTR: *const u16 = 0x0000_0018 as _;
 
 /// Pointer to helper functions lookup table.
 const FUNC_TABLE: *const u16 = 0x0000_0014 as _;
-
-/// Pointer to the public data lookup table.
-const DATA_TABLE: *const u16 = 0x0000_0016 as _;
 
 /// Retrive rom content from a table using a code.
 fn rom_table_lookup<T>(table: *const u16, tag: RomFnTableCode) -> T {
@@ -192,7 +189,6 @@ fn read_uid() -> u64 {
 
     unsafe {
         boot_2_copyout();
-        info!("copyout done");
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         initialize_xip_ram();
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
@@ -202,8 +198,6 @@ fn read_uid() -> u64 {
         flash_enable_xip_via_boot2();
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     }
-
-//    info!("done");
 
     u64::from_le_bytes(rxbuf[FLASH_RUID_DUMMY_BYTES + 1..].try_into().unwrap())
 }
@@ -218,7 +212,3 @@ fn main() -> ! {
     loop {}
 }
 
-#[exception]
-unsafe fn HardFault(eh: &ExceptionFrame) -> ! {
-    panic!("Hardfault: {:?}", eh);
-}

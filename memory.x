@@ -2,7 +2,7 @@ MEMORY {
     BOOT2 : ORIGIN = 0x10000000, LENGTH = 0x100
     FLASH : ORIGIN = 0x10000100, LENGTH = 2048K - 0x100
     RAM   : ORIGIN = 0x20000000, LENGTH = 256K
-    XIP   : ORIGIN = 0x15000000, LENGTH = 16K
+    XIP_RAM : ORIGIN = 0x15000000, LENGTH = 16K
 }
 
 EXTERN(BOOT2_FIRMWARE)
@@ -17,8 +17,8 @@ SECTIONS {
 } INSERT BEFORE .text;
 
 SECTIONS {
-    /* ### to be copied to XIP ram on demand */
-    .xiptext ORIGIN(XIP) : {
+    /* ### to be copied to XIP_RAM on demand */
+    .xiptext ORIGIN(XIP_RAM) : {
         . = ALIGN(4);
     	__sxiptext = .;
       	KEEP(*(.xiptext .xiptext.*));		
