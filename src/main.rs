@@ -12,6 +12,7 @@ use rp_pico as bsp;
 
 use bsp::hal::pac;
 use bsp::hal::rom_data;
+use core::convert::TryInto;
 
 extern "C" {
     static mut __sixiptext: u8;
@@ -71,20 +72,25 @@ unsafe fn set_cs(level: bool) {
 // the RAM functions
 #[inline(never)]
 unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
-    let connect_internal_flash = rom_data::connect_internal_flash;
+    let connect_internal_flash: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"IF".clone());
     let flash_exit_xip: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"EX".clone());
     let flash_flush_cache: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"FC".clone());
     let flash_enter_cmd_xip: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"CX".clone());
 
+    info!("txbuf: {:x}", txbuf);
+    info!("rxbuf: {:x}", rxbuf);
+    info!("count: {:x}", count);
 
-    //connect_internal_flash();
+
+    connect_internal_flash();
     flash_exit_xip();
 
-    /*
     set_cs(false);
 
+    let count = 13;
          let ssi = &*pac::XIP_SSI::ptr();
 
+         /*
          for i in 0..count {
              while !ssi.sr.read().tfnf().bit_is_set() {}
              ssi.dr0.write(|w| w.dr().bits(*txbuf.add(i) as _));
@@ -92,16 +98,16 @@ unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
              while !ssi.sr.read().rfne().bit_is_set() {}
              ssi.dr0.write(|w| w.dr().bits(*txbuf.add(i) as _));
          }
+         */
 
          let mut tx_rem = count;
          let mut rx_rem = count;
 
          while rx_rem > 0 || tx_rem > 0 {
+             const MAX_IN_FLIGHT: usize = 16 - 2;
              let flags = ssi.sr.read();
              let can_put = flags.tfnf().bit_is_set() && tx_rem > 0 && rx_rem - tx_rem < MAX_IN_FLIGHT;
              let can_get = flags.rfne().bit_is_set() && rx_rem > 0;
-
-             const MAX_IN_FLIGHT: usize = 16 - 2;
 
              if can_put {
                  ssi.dr0.write(|w| w.dr().bits(*txbuf as _));
@@ -117,7 +123,6 @@ unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
          }
 
 
-    */
         set_cs(true);
     (&*pac::IO_QSPI::ptr())
         .gpio_qspiss
@@ -193,14 +198,14 @@ fn read_uid() -> u64 {
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         do_flash_cmd(txbuf.as_ptr(), rxbuf.as_mut_ptr(), FLASH_RUID_TOTAL_BYTES);
         //info!("call boot2");
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         flash_enable_xip_via_boot2();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     }
 
-    info!("done");
-    info!("rx: {:?}", rxbuf);
+//    info!("done");
 
-    // u64::from_le_bytes(rxbuf[FLASH_RUID_DUMMY_BYTES..].try_into().unwrap())
-    0
+    u64::from_le_bytes(rxbuf[FLASH_RUID_DUMMY_BYTES + 1..].try_into().unwrap())
 }
 
 #[entry]
