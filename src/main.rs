@@ -76,65 +76,104 @@ unsafe fn set_cs(level: bool) {
 #[inline(never)]
 unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
     let connect_internal_flash = rom_data::connect_internal_flash;
-    let flash_exit_xip = rom_data::flash_exit_xip;
-    let flash_flush_cache = rom_data::flash_flush_cache;
+    let flash_exit_xip: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"EX".clone());
+    let flash_flush_cache: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"FC".clone());
+    let flash_enter_cmd_xip: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, b"CX".clone());
 
     boot_2_copyout();
 
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let enable_xip = flash_enable_xip_via_boot2();
+    info!("enable_xip = {:x}", enable_xip as *const u8 as u32);
 
-    connect_internal_flash();
+    //connect_internal_flash();
     flash_exit_xip();
 
-    // set_cs(false);
+    set_cs(false);
+    /*
 
-    // let ssi = &*pac::XIP_SSI::ptr();
+         let ssi = &*pac::XIP_SSI::ptr();
 
-    // for i in 0..count {
-    //     while !ssi.sr.read().tfnf().bit_is_set() {}
-    //     ssi.dr0.write(|w| w.dr().bits(*txbuf.add(i) as _));
+         for i in 0..count {
+             while !ssi.sr.read().tfnf().bit_is_set() {}
+             ssi.dr0.write(|w| w.dr().bits(*txbuf.add(i) as _));
 
-    //     while !ssi.sr.read().rfne().bit_is_set() {}
-    //     ssi.dr0.write(|w| w.dr().bits(*txbuf.add(i) as _));
-    // }
+             while !ssi.sr.read().rfne().bit_is_set() {}
+             ssi.dr0.write(|w| w.dr().bits(*txbuf.add(i) as _));
+         }
 
-    // let mut tx_rem = count;
-    // let mut rx_rem = count;
+         let mut tx_rem = count;
+         let mut rx_rem = count;
 
-    // while rx_rem > 0 || tx_rem > 0 {
-    //     let flags = ssi.sr.read();
-    //     let can_put = flags.tfnf().bit_is_set() && tx_rem > 0 && rx_rem - tx_rem < MAX_IN_FLIGHT;
-    //     let can_get = flags.rfne().bit_is_set() && rx_rem > 0;
+         while rx_rem > 0 || tx_rem > 0 {
+             let flags = ssi.sr.read();
+             let can_put = flags.tfnf().bit_is_set() && tx_rem > 0 && rx_rem - tx_rem < MAX_IN_FLIGHT;
+             let can_get = flags.rfne().bit_is_set() && rx_rem > 0;
 
-    //     const MAX_IN_FLIGHT: usize = 16 - 2;
+             const MAX_IN_FLIGHT: usize = 16 - 2;
 
-    //     if can_put {
-    //         ssi.dr0.write(|w| w.dr().bits(*txbuf as _));
-    //         txbuf = txbuf.add(1);
-    //         tx_rem -= 1;
-    //     }
+             if can_put {
+                 ssi.dr0.write(|w| w.dr().bits(*txbuf as _));
+                 txbuf = txbuf.add(1);
+                 tx_rem -= 1;
+             }
 
-    //     if can_get {
-    //         core::ptr::write(rxbuf, ssi.dr0.read().dr().bits() as _);
-    //         rxbuf = rxbuf.add(1);
-    //         rx_rem -= 1;
-    //     }
-    // }
+             if can_get {
+                 core::ptr::write(rxbuf, ssi.dr0.read().dr().bits() as _);
+                 rxbuf = rxbuf.add(1);
+                 rx_rem -= 1;
+             }
+         }
 
-    // set_cs(true);
 
-    flash_flush_cache();
-    flash_enable_xip_via_boot2();
+        flash_flush_cache();
+    */
+    //set_cs(true);
+    flash_enter_cmd_xip();
+    //enable_xip();
+}
+
+// some non-pub stuff copied from HAL
+
+unsafe fn rom_hword_as_ptr(rom_address: *const u16) -> *const u32 {
+    let ptr: u16 = *rom_address;
+    ptr as *const u32
+}
+
+/// A bootrom function table code.
+pub type RomFnTableCode = [u8; 2];
+
+/// This function searches for (table)
+type RomTableLookupFn<T> = unsafe extern "C" fn(*const u16, u32) -> T;
+
+/// The following addresses are described at `2.8.2. Bootrom Contents`
+/// Pointer to the lookup table function supplied by the rom.
+const ROM_TABLE_LOOKUP_PTR: *const u16 = 0x0000_0018 as _;
+
+/// Pointer to helper functions lookup table.
+const FUNC_TABLE: *const u16 = 0x0000_0014 as _;
+
+/// Pointer to the public data lookup table.
+const DATA_TABLE: *const u16 = 0x0000_0016 as _;
+
+/// Retrive rom content from a table using a code.
+fn rom_table_lookup<T>(table: *const u16, tag: RomFnTableCode) -> T {
+    unsafe {
+        let rom_table_lookup_ptr: *const u32 = rom_hword_as_ptr(ROM_TABLE_LOOKUP_PTR);
+        let rom_table_lookup: RomTableLookupFn<T> = core::mem::transmute(rom_table_lookup_ptr);
+        rom_table_lookup(
+            rom_hword_as_ptr(table) as *const u16,
+            u16::from_le_bytes(tag) as u32,
+        )
+    }
 }
 
 #[link_section = ".xiptext"]
 // safety: must only be called while XIP RAM is initialized with
 // the RAM functions
 #[inline(never)]
-unsafe fn flash_enable_xip_via_boot2() {
-    let start: extern "C" fn() =
-        core::mem::transmute((BOOT2_COPYOUT.as_mut_ptr() as *const u8).add(1));
-    start();
+unsafe fn flash_enable_xip_via_boot2() -> extern "C" fn() {
+    core::mem::transmute((BOOT2_COPYOUT.as_mut_ptr() as *const u8).add(1))
 }
 
 const FLASH_RUID_CMD: u8 = 0x4b;
@@ -153,7 +192,8 @@ fn read_uid() -> u64 {
         do_flash_cmd(txbuf.as_ptr(), rxbuf.as_mut_ptr(), FLASH_RUID_TOTAL_BYTES);
     }
 
-    info!("rx: {}", rxbuf);
+    info!("done");
+    info!("rx: {:?}", rxbuf);
 
     // u64::from_le_bytes(rxbuf[FLASH_RUID_DUMMY_BYTES..].try_into().unwrap())
     0
