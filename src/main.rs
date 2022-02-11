@@ -18,7 +18,6 @@ extern "C" {
 
 /// Disable XIP caching, and initialize
 /// memory region XIP_RAM with contents from flash
-#[inline(never)] // only for readability of disassembly
 fn initialize_xip_ram() {
     // disable XIP caching
     unsafe {
@@ -36,37 +35,34 @@ fn initialize_xip_ram() {
     }
 }
 
-#[link_section = ".xiptext"]
 // safety: must only be called while XIP RAM is initialized with
-// the RAM functions
-#[inline(never)]
+// the RAM functions, ie. after calling initialize_xip_ram()
+#[link_section = ".xiptext"]
 unsafe fn force_cs_low(level: bool) {
-    (*pac::IO_QSPI::ptr())
-        .gpio_qspiss
-        .gpio_ctrl
-        .modify(|_, w| {
-            if level {
-                w.outover().low()
-            } else {
-                w.outover().normal()
-            }
-        });
+    (*pac::IO_QSPI::ptr()).gpio_qspiss.gpio_ctrl.modify(|_, w| {
+        if level {
+            w.outover().low()
+        } else {
+            w.outover().normal()
+        }
+    });
 }
 
-#[link_section = ".xiptext"]
 // safety: must only be called while XIP RAM is initialized with
-// the RAM functions
+// the RAM functions, ie. after calling initialize_xip_ram()
 #[inline(never)]
+#[link_section = ".xiptext"]
 unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
-    let connect_internal_flash: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, *b"IF");
-    let flash_exit_xip: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, *b"EX");
-    //let flash_flush_cache: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, *b"FC");
-    let flash_enter_cmd_xip: extern "C" fn() -> () = rom_table_lookup(FUNC_TABLE, *b"CX");
+    // need to do rom lookups manually, as the obvious way, like
+    // `let connect_internal_flash = rom_data::connect_internal_flash;`
+    // returns a pointer to flash
+    let connect_internal_flash: extern "C" fn() -> () = rom::rom_table_lookup(*b"IF");
+    let flash_exit_xip: extern "C" fn() -> () = rom::rom_table_lookup(*b"EX");
+    let flash_enter_cmd_xip: extern "C" fn() -> () = rom::rom_table_lookup(*b"CX");
 
     info!("txbuf: {:x}", txbuf);
     info!("rxbuf: {:x}", rxbuf);
     info!("count: {:x}", count);
-
 
     connect_internal_flash();
     flash_exit_xip();
@@ -74,79 +70,36 @@ unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
     force_cs_low(true);
 
     let count = 13;
-         let ssi = &*pac::XIP_SSI::ptr();
+    let ssi = &*pac::XIP_SSI::ptr();
 
-         /*
-         for i in 0..count {
-             while !ssi.sr.read().tfnf().bit_is_set() {}
-             ssi.dr0.write(|w| w.dr().bits(*txbuf.add(i) as _));
+    let mut tx_rem = count;
+    let mut rx_rem = count;
 
-             while !ssi.sr.read().rfne().bit_is_set() {}
-             ssi.dr0.write(|w| w.dr().bits(*txbuf.add(i) as _));
-         }
-         */
+    while rx_rem > 0 || tx_rem > 0 {
+        const MAX_IN_FLIGHT: usize = 16 - 2;
+        let flags = ssi.sr.read();
+        let can_put = flags.tfnf().bit_is_set() && tx_rem > 0 && rx_rem - tx_rem < MAX_IN_FLIGHT;
+        let can_get = flags.rfne().bit_is_set() && rx_rem > 0;
 
-         let mut tx_rem = count;
-         let mut rx_rem = count;
+        if can_put {
+            ssi.dr0.write(|w| w.dr().bits(*txbuf as _));
+            txbuf = txbuf.add(1);
+            tx_rem -= 1;
+        }
 
-         while rx_rem > 0 || tx_rem > 0 {
-             const MAX_IN_FLIGHT: usize = 16 - 2;
-             let flags = ssi.sr.read();
-             let can_put = flags.tfnf().bit_is_set() && tx_rem > 0 && rx_rem - tx_rem < MAX_IN_FLIGHT;
-             let can_get = flags.rfne().bit_is_set() && rx_rem > 0;
+        if can_get {
+            core::ptr::write(rxbuf, ssi.dr0.read().dr().bits() as _);
+            rxbuf = rxbuf.add(1);
+            rx_rem -= 1;
+        }
+    }
 
-             if can_put {
-                 ssi.dr0.write(|w| w.dr().bits(*txbuf as _));
-                 txbuf = txbuf.add(1);
-                 tx_rem -= 1;
-             }
-
-             if can_get {
-                 core::ptr::write(rxbuf, ssi.dr0.read().dr().bits() as _);
-                 rxbuf = rxbuf.add(1);
-                 rx_rem -= 1;
-             }
-         }
-
-
-        force_cs_low(false);
-    // Can't use this, as enabling the cache would overwrite the currently running method
+    force_cs_low(false);
+    // Can't use this, as enabling the cache would overwrite the currently running method:
     // flash_flush_cache();
-    // Instead, re-enable XIP, but without caching, so XIP RAM stays available
+    // Instead, re-enable XIP, but without caching, so XIP RAM stays available:
     flash_enter_cmd_xip();
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-}
-
-// some non-pub stuff copied from HAL
-
-unsafe fn rom_hword_as_ptr(rom_address: *const u16) -> *const u32 {
-    let ptr: u16 = *rom_address;
-    ptr as *const u32
-}
-
-/// A bootrom function table code.
-pub type RomFnTableCode = [u8; 2];
-
-/// This function searches for (table)
-type RomTableLookupFn<T> = unsafe extern "C" fn(*const u16, u32) -> T;
-
-/// The following addresses are described at `2.8.2. Bootrom Contents`
-/// Pointer to the lookup table function supplied by the rom.
-const ROM_TABLE_LOOKUP_PTR: *const u16 = 0x0000_0018 as _;
-
-/// Pointer to helper functions lookup table.
-const FUNC_TABLE: *const u16 = 0x0000_0014 as _;
-
-/// Retrive rom content from a table using a code.
-fn rom_table_lookup<T>(table: *const u16, tag: RomFnTableCode) -> T {
-    unsafe {
-        let rom_table_lookup_ptr: *const u32 = rom_hword_as_ptr(ROM_TABLE_LOOKUP_PTR);
-        let rom_table_lookup: RomTableLookupFn<T> = core::mem::transmute(rom_table_lookup_ptr);
-        rom_table_lookup(
-            rom_hword_as_ptr(table) as *const u16,
-            u16::from_le_bytes(tag) as u32,
-        )
-    }
 }
 
 const FLASH_RUID_CMD: u8 = 0x4b;
@@ -190,3 +143,40 @@ fn main() -> ! {
     loop {}
 }
 
+
+mod rom {
+
+    // Some non-pub stuff copied from HAL. 
+    // TODO: add methods to return those pointers to HAL
+
+    unsafe fn rom_hword_as_ptr(rom_address: *const u16) -> *const u32 {
+        let ptr: u16 = *rom_address;
+        ptr as *const u32
+    }
+
+    /// A bootrom function table code.
+    pub type RomFnTableCode = [u8; 2];
+
+    /// This function searches for (table)
+    type RomTableLookupFn<T> = unsafe extern "C" fn(*const u16, u32) -> T;
+
+    /// The following addresses are described at `2.8.2. Bootrom Contents`
+    /// Pointer to the lookup table function supplied by the rom.
+    const ROM_TABLE_LOOKUP_PTR: *const u16 = 0x0000_0018 as _;
+
+    /// Pointer to helper functions lookup table.
+    const FUNC_TABLE: *const u16 = 0x0000_0014 as _;
+
+    /// Retrive rom content from a table using a code.
+    pub fn rom_table_lookup<T>(tag: RomFnTableCode) -> T {
+        let table = FUNC_TABLE;
+        unsafe {
+            let rom_table_lookup_ptr: *const u32 = rom_hword_as_ptr(ROM_TABLE_LOOKUP_PTR);
+            let rom_table_lookup: RomTableLookupFn<T> = core::mem::transmute(rom_table_lookup_ptr);
+            rom_table_lookup(
+                rom_hword_as_ptr(table) as *const u16,
+                u16::from_le_bytes(tag) as u32,
+            )
+        }
+    }
+}
