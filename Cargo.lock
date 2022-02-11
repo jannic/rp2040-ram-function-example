@@ -495,7 +495,6 @@ dependencies = [
  "defmt",
  "defmt-rtt",
  "embedded-hal",
- "embedded-time",
  "panic-probe",
  "rp-pico",
 ]
