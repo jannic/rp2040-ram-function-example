@@ -60,16 +60,12 @@ unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
     let flash_exit_xip: extern "C" fn() -> () = rom::rom_table_lookup(*b"EX");
     let flash_enter_cmd_xip: extern "C" fn() -> () = rom::rom_table_lookup(*b"CX");
 
-    info!("txbuf: {:x}", txbuf);
-    info!("rxbuf: {:x}", rxbuf);
-    info!("count: {:x}", count);
-
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     connect_internal_flash();
     flash_exit_xip();
 
     force_cs_low(true);
 
-    let count = 13;
     let ssi = &*pac::XIP_SSI::ptr();
 
     let mut tx_rem = count;
@@ -117,17 +113,18 @@ fn read_uid() -> u64 {
     unsafe {
         // This can't be in XIP_RAM, as calling it will enable
         // XIP caching and therefore overwrites XIP_RAM.
+        // Uses [u32] to force alignment
         let boot2_copyout: [u32; 64] = core::mem::transmute(bsp::BOOT2_FIRMWARE);
+        // make sure boot2_copyout is really initalized - otherwise, initializing
+        // this memory might get elided by optimizer.
+        // NOTE: I'm not sure if this is formally sufficient. It seems to work
+        // in practice, though.
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         initialize_xip_ram();
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         do_flash_cmd(txbuf.as_ptr(), rxbuf.as_mut_ptr(), FLASH_RUID_TOTAL_BYTES);
-        //info!("call boot2");
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         let flash_enable_xip_via_boot2: extern "C" fn() =
             core::mem::transmute((boot2_copyout.as_ptr() as *const u8).add(1));
         flash_enable_xip_via_boot2();
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     }
 
     u64::from_le_bytes(rxbuf[FLASH_RUID_DUMMY_BYTES + 1..].try_into().unwrap())
