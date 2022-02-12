@@ -14,9 +14,7 @@ defmt-rtt = "0.3.0"
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
 
 rp-pico = "0.3.0"
-
-[features]
-asm = []
+critical-section = "0.2.5"
 
 [patch.crates-io]
 rp-pico = { git = 'https://github.com/rp-rs/rp-hal/' }
@@ -31,6 +29,14 @@ incremental = false
 opt-level = 1
 overflow-checks = true
 
+# do not optimize proc-macro crates = faster builds from scratch
+[profile.dev.build-override]
+codegen-units = 8
+debug = false
+debug-assertions = false
+opt-level = 0
+overflow-checks = false
+
 # cargo build/run --release
 [profile.release]
 codegen-units = 1
@@ -39,14 +45,6 @@ debug-assertions = false
 incremental = false
 lto = 'fat'
 opt-level = 's'
-overflow-checks = false
-
-# do not optimize proc-macro crates = faster builds from scratch
-[profile.dev.build-override]
-codegen-units = 8
-debug = false
-debug-assertions = false
-opt-level = 0
 overflow-checks = false
 
 [profile.release.build-override]
