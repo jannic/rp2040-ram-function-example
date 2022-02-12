@@ -7,7 +7,7 @@ use defmt_rtt as _;
 use panic_probe as _;
 use rp_pico as bsp;
 
-use bsp::hal::pac;
+use bsp::hal::{pac, rom_data};
 use core::convert::TryInto;
 
 extern "C" {
@@ -27,7 +27,7 @@ fn initialize_xip_ram() {
     }
     // copy xiptext from flash to XIP RAM
     unsafe {
-        bsp::hal::rom_data::memcpy(
+        rom_data::memcpy(
             &mut __sxiptext as *mut u8,
             &mut __sixiptext as *mut u8,
             (&__exiptext as *const u8).offset_from(&__sxiptext as *const u8) as u32,
@@ -55,10 +55,10 @@ unsafe fn force_cs_low(level: bool) {
 unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
     // need to do rom lookups manually, as the obvious way, like
     // `let connect_internal_flash = rom_data::connect_internal_flash;`
-    // returns a pointer to flash
-    let connect_internal_flash: extern "C" fn() -> () = rom::rom_table_lookup(*b"IF");
-    let flash_exit_xip: extern "C" fn() -> () = rom::rom_table_lookup(*b"EX");
-    let flash_enter_cmd_xip: extern "C" fn() -> () = rom::rom_table_lookup(*b"CX");
+    // returns a function in flash.
+    let connect_internal_flash: unsafe extern "C" fn() -> () = rom_data::connect_internal_flash::ptr();
+    let flash_exit_xip: unsafe extern "C" fn() -> () = rom_data::flash_exit_xip::ptr();
+    let flash_enter_cmd_xip: unsafe extern "C" fn() -> () = rom_data::flash_enter_cmd_xip::ptr();
 
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     connect_internal_flash();
@@ -140,40 +140,3 @@ fn main() -> ! {
     loop {}
 }
 
-
-mod rom {
-
-    // Some non-pub stuff copied from HAL. 
-    // TODO: add methods to return those pointers to HAL
-
-    unsafe fn rom_hword_as_ptr(rom_address: *const u16) -> *const u32 {
-        let ptr: u16 = *rom_address;
-        ptr as *const u32
-    }
-
-    /// A bootrom function table code.
-    pub type RomFnTableCode = [u8; 2];
-
-    /// This function searches for (table)
-    type RomTableLookupFn<T> = unsafe extern "C" fn(*const u16, u32) -> T;
-
-    /// The following addresses are described at `2.8.2. Bootrom Contents`
-    /// Pointer to the lookup table function supplied by the rom.
-    const ROM_TABLE_LOOKUP_PTR: *const u16 = 0x0000_0018 as _;
-
-    /// Pointer to helper functions lookup table.
-    const FUNC_TABLE: *const u16 = 0x0000_0014 as _;
-
-    /// Retrive rom content from a table using a code.
-    pub fn rom_table_lookup<T>(tag: RomFnTableCode) -> T {
-        let table = FUNC_TABLE;
-        unsafe {
-            let rom_table_lookup_ptr: *const u32 = rom_hword_as_ptr(ROM_TABLE_LOOKUP_PTR);
-            let rom_table_lookup: RomTableLookupFn<T> = core::mem::transmute(rom_table_lookup_ptr);
-            rom_table_lookup(
-                rom_hword_as_ptr(table) as *const u16,
-                u16::from_le_bytes(tag) as u32,
-            )
-        }
-    }
-}
