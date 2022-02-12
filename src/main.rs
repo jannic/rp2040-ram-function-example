@@ -96,7 +96,7 @@ fn read_uid() -> u64 {
 
     txbuf[0] = FLASH_RUID_CMD;
 
-    critical_section::with(|_| {
+    cortex_m::interrupt::free(|_| {
         unsafe {
             initialize_xip_ram();
             do_flash_cmd(txbuf.as_ptr(), rxbuf.as_mut_ptr(), FLASH_RUID_TOTAL_BYTES);
