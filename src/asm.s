@@ -1,10 +1,5 @@
-	.section        .xiptext,"ax",%progbits
-	.globl	do_flash_cmd
-	.p2align	2
-	.type	do_flash_cmd,%function
-do_flash_cmd:
-	push	{r4, r5, r6, r7, lr}
-	add	r7, sp, #12
+	push	{r4, r5, r6, r7}
+	add	r7, sp, #16
 	sub	sp, #20
 	mov	r6, r2
 	str	r1, [sp, #16]
@@ -111,8 +106,7 @@ do_flash_cmd:
 	str	r1, [r0]
 	ldr	r0, [sp, #8]
 	blx	r0
-	add	sp, #20
-	pop	{r4, r5, r6, r7, pc}
+	b	0f
 	.p2align	2
 7:
 	.long	17993
@@ -124,3 +118,7 @@ do_flash_cmd:
 	.long	4294966527
 5:
 	.long	402653224
+	.p2align	2
+0:
+	add	sp, #20
+	pop	{r4, r5, r6, r7}

@@ -8,8 +8,8 @@ use panic_probe as _;
 use rp_pico as bsp;
 
 use bsp::hal::{pac, rom_data};
+use core::arch::asm;
 use core::convert::TryInto;
-use core::arch::global_asm;
 
 extern "C" {
     static mut __sixiptext: u8;
@@ -17,16 +17,22 @@ extern "C" {
     static mut __exiptext: u8;
 }
 
-global_asm!(include_str!("./asm.s"),options(raw));
-
-// defined within above global_asm
+// Execute a flash command.
 //
 // # Safety
 // This symbol is located in section xiptext, which must be manually
 // initialized before calling this function. See read_uid for
 // an example.
-extern {
-    fn do_flash_cmd(txbuf: *const u8, rxbuf: *mut u8, count: usize);
+#[link_section = ".xiptext"]
+#[inline(never)]
+unsafe fn do_flash_cmd(txbuf: *const u8, rxbuf: *mut u8, count: usize) {
+    asm!(
+        include_str!("./asm.s"),
+        inout("r0") txbuf => _,
+        inout("r1") rxbuf => _,
+        in("r2") count,
+        options(raw),
+    );
 }
 
 /// Disable XIP caching, and initialize memory region XIP_RAM with contents from flash
@@ -58,7 +64,7 @@ fn initialize_xip_ram() {
 ///
 /// # Safety
 ///
-/// Temporarily disables XIP access. Therefore it must be called from 
+/// Temporarily disables XIP access. Therefore it must be called from
 /// within a critical section, and the second core must not be executing
 /// code from flash concurrently!
 #[inline(never)] // only for readability of disassembly
@@ -110,4 +116,3 @@ fn main() -> ! {
     #[allow(clippy::empty_loop)]
     loop {}
 }
-
