@@ -9,12 +9,17 @@ use rp_pico as bsp;
 
 use bsp::hal::{pac, rom_data};
 use core::convert::TryInto;
+#[cfg(feature="asm")]
+use core::arch::global_asm;
 
 extern "C" {
     static mut __sixiptext: u8;
     static mut __sxiptext: u8;
     static mut __exiptext: u8;
 }
+
+#[cfg(feature="asm")]
+global_asm!(include_str!("./asm.s"),options(raw));
 
 /// Disable XIP caching, and initialize
 /// memory region XIP_RAM with contents from flash
@@ -48,10 +53,17 @@ unsafe fn force_cs_low(level: bool) {
     });
 }
 
+extern {
+    #[cfg(feature="asm")]
+    fn do_flash_cmd(txbuf: *const u8, rxbuf: *mut u8, count: usize);
+}
+
 // safety: must only be called while XIP RAM is initialized with
 // the RAM functions, ie. after calling initialize_xip_ram()
 #[inline(never)]
 #[link_section = ".xiptext"]
+#[no_mangle]
+#[cfg(not(feature="asm"))]
 unsafe fn do_flash_cmd(mut txbuf: *const u8, mut rxbuf: *mut u8, count: usize) {
     // need to do rom lookups manually, as the obvious way, like
     // `let connect_internal_flash = rom_data::connect_internal_flash;`

@@ -15,6 +15,9 @@ panic-probe = { version = "0.3.0", features = ["print-defmt"] }
 
 rp-pico = "0.3.0"
 
+[features]
+asm = []
+
 [patch.crates-io]
 rp-pico = { git = 'https://github.com/rp-rs/rp-hal/' }
 rp2040-hal = { git = 'https://github.com/rp-rs/rp-hal/' }
